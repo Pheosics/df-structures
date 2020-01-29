@@ -19,7 +19,7 @@ BEGIN {
 
         &is_primitive_type &primitive_type_name &get_primitive_base
 
-        *weak_refs *strong_refs &register_ref &decode_type_name_ref
+        *weak_refs *strong_refs *header_refs &header_ref &register_ref &decode_type_name_ref
 
         &with_capture_traits &with_emit_traits
         *cur_header_name %header_data &with_header_file
@@ -58,7 +58,7 @@ our $filename;
 sub parse_address($;$) {
     my ($str,$in_bits) = @_;
     return undef unless defined $str;
-    
+
     # Parse the format used by offset attributes in xml
     $str =~ /^0x([0-9a-f]+)(?:\.([0-7]))?$/
         or die "Invalid address syntax: $str\n";
@@ -69,7 +69,7 @@ sub parse_address($;$) {
 
 sub check_bad_attrs($;$$) {
     my ($tag, $allow_size, $allow_align) = @_;
-    
+
     die "Cannot use size, alignment or offset for ".$tag->nodeName."\n"
         if ((!$allow_size && defined $tag->getAttribute('size')) ||
             defined $tag->getAttribute('offset') ||
@@ -126,7 +126,7 @@ sub add_global_to_hash($) {
 our @lines;
 our $indentation = 0;
 
-sub with_emit(&;$) { 
+sub with_emit(&;$) {
     # Executes the code block, and returns emitted lines
     my ($blk, $start_indent) = @_;
     local @lines;
@@ -173,6 +173,7 @@ sub emit_block(&;$$%) {
 my @primitive_type_list =
     qw(int8_t uint8_t int16_t uint16_t
        int32_t uint32_t int64_t uint64_t
+       long
        s-float d-float
        bool flag-bit
        padding static-string);
@@ -203,6 +204,9 @@ sub get_primitive_base($;$) {
     my ($tag, $default) = @_;
 
     my $base = $tag->getAttribute('base-type') || $default || 'uint32_t';
+    if ($base =~ /u?int[136]?[2468]_t/) {
+        header_ref("cstdint");
+    }
     $primitive_types{$base} or die "Must be primitive: $base\n";
 
     return $base;
@@ -212,6 +216,7 @@ sub get_primitive_base($;$) {
 
 our %weak_refs;
 our %strong_refs;
+our %header_refs;
 
 sub register_ref($;$) {
     # Register a reference to another type.
@@ -232,6 +237,12 @@ sub register_ref($;$) {
     } else {
         return undef;
     }
+}
+
+sub header_ref($;$) {
+    my ($header) = @_;
+
+    $header_refs{$header}++;
 }
 
 sub decode_type_name_ref($;%) {
@@ -287,6 +298,7 @@ sub with_header_file(&$) {
 
     local %weak_refs;
     local %strong_refs;
+    local %header_refs;
 
     # Emit the actual type definition
     my @code = with_emit {
@@ -301,14 +313,17 @@ sub with_header_file(&$) {
     # Add wrapping
     my @all = with_emit {
         my $def = type_header_def($header_name);
-        emit "#ifndef $def";
-        emit "#define $def";
+        emit "#pragma once";
+        emit "#ifdef __GNUC__";
+        emit "#pragma GCC system_header";
+        emit "#endif";
+
+        for my $strong (sort { $a cmp $b } keys %header_refs) {
+            emit "#include \"$strong\"";
+        }
 
         for my $strong (sort { $a cmp $b } keys %strong_refs) {
-            my $sdef = type_header_def($strong);
-            emit "#ifndef $sdef";
             emit "#include \"$strong.h\"";
-            emit "#endif";
         }
 
         emit_block {
@@ -325,8 +340,6 @@ sub with_header_file(&$) {
 
             push @lines, @code;
         } "namespace $main_namespace ";
-
-        emit "#endif";
     };
 
     $header_data{$header_name} = \@all;
@@ -451,7 +464,21 @@ sub get_comment($) {
 
     return '' unless $tag;
 
-    if (my $val = $tag->getAttribute('comment')) {
+    my $since = $tag->getAttribute('since');
+    my $comment = $tag->getAttribute('comment');
+    my $val = '';
+
+    if ($since) {
+        $val = $val . 'since ' . $since;
+        if ($comment) {
+            $val = $val . '; ';
+        }
+    }
+    if ($comment) {
+        $val = $val . $comment;
+    }
+
+    if ($val) {
         return ' /*!< '.$val.' */';
     } else {
         return '';
@@ -471,6 +498,11 @@ sub emit_comment($;%) {
             $val = $attr."\n".$val;
         } else {
             $val ||= $attr;
+        }
+
+        my $since = $tag->getAttribute('since');
+        if ($since) {
+            $val .= "\nSince " . $since;
         }
     }
 

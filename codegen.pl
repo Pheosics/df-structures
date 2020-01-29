@@ -96,6 +96,7 @@ with_header_file {
                     my $prefix = get_container_item_type($tag, -weak => 1, -void => 'void');
                     emit_comment $tag;
                     emit 'extern ', $export_prefix, $prefix, ' *', $name, ';', get_comment($tag);
+                    header_ref("Export.h");
 
                     push @items, [ $prefix, $name ];
                     push @fields, $tag->findnodes('ld:item');
@@ -134,14 +135,14 @@ with_header_file {
 sub replace_file {
     my ($filename, $new) = @_;
     if (-e $filename) {
-        open FH, "<$filename";
+        open(FH, '<', $filename);
         my $old = do { local $/; <FH> };
         close FH;
         if ($old eq $new) {
             return;
         }
     }
-    open FH, ">$filename";
+    open(FH, '>', $filename);
     do { local $\; print FH $new };
     close FH;
 }
@@ -189,10 +190,20 @@ mkdir $output_dir;
         $files{$name} = 0;
     }
 
+    # Touch all static.fields-*.inc files
+    for my $group ("a" .. "z") {
+        my $name = $output_dir."/static.fields-$group.inc";
+        unless (-f $name) {
+            open my $fh, ">>", $name;
+            close $fh;
+        }
+        $files{$name} = 0;
+    }
+
     # Write an xml file with all types.
     # Always do it, so that its date could be used in make to
     # determine if the script had been run after inputs changed.
-    open FH, ">$output_dir/codegen.out.xml";
+    open(FH, '>', "$output_dir/codegen.out.xml");
     print FH '<ld:data-definition xmlns:ld="http://github.com/peterix/dfhack/lowered-data-definition">';
     for my $doc (@documents) {
         for my $node ($doc->documentElement()->findnodes('*')) {
